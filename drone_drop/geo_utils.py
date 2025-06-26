@@ -1,29 +1,26 @@
+import os
 import random
 import geopandas as gpd
 from shapely.geometry import shape, Point
 import fiona
+
+DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+CITIES_PATH = os.path.join(DATA_DIR, 'ne_110m_populated_places.shp')
+LAND_PATH = os.path.join(DATA_DIR, 'ne_110m_land.shp')
 
 _cities_gdf    = None
 _use_land_check = False
 _land_features = []
 
 try:
-    cities_path = gpd.datasets.get_path("naturalearth_cities")
-    _cities_gdf = gpd.read_file(cities_path)
-    land_shp = gpd.datasets.get_path("naturalearth_lowres")
-    with fiona.open(land_shp) as src:
+    _cities_gdf = gpd.read_file(CITIES_PATH)
+    with fiona.open(LAND_PATH) as src:
         _land_features = list(src)
     _use_land_check = True
-except Exception:
+except Exception as e:
     _cities_gdf = None
-    try:
-        land_shp = gpd.datasets.get_path("naturalearth_lowres")
-        with fiona.open(land_shp) as src:
-            _land_features = list(src)
-        _use_land_check = True
-    except Exception:
-        _land_features = []
-        _use_land_check = False
+    _land_features = []
+    _use_land_check = False
 
 def get_random_land_point():
     """
