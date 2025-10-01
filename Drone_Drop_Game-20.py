@@ -87,6 +87,38 @@ def get_random_city_point():
 # ──────────────────────────────────────────────────────────────────────────────
 # TRAJECTORY COMPUTATION (drag, density, wind shear; CdA ≤ 0.1)
 # ──────────────────────────────────────────────────────────────────────────────
+def displacement_to_latlon(lat0, lon0, dx, dy, *, dist=None, bearing=None):
+    """Convert local ENU displacement (meters) into lat/lon using great-circle math."""
+    R_earth = 6_371_000.0
+
+    if dist is None:
+        dist = math.hypot(dx, dy)
+    if dist == 0.0:
+        return lat0, lon0
+
+    lat0_rad = math.radians(lat0)
+    lon0_rad = math.radians(lon0)
+    if bearing is None:
+        bearing = math.atan2(dx, dy)
+    angular_distance = dist / R_earth
+
+    sin_lat1 = (
+        math.sin(lat0_rad) * math.cos(angular_distance)
+        + math.cos(lat0_rad) * math.sin(angular_distance) * math.cos(bearing)
+    )
+    sin_lat1 = max(-1.0, min(1.0, sin_lat1))
+    lat1_rad = math.asin(sin_lat1)
+
+    lon1_rad = lon0_rad + math.atan2(
+        math.sin(bearing) * math.sin(angular_distance) * math.cos(lat0_rad),
+        math.cos(angular_distance) - math.sin(lat0_rad) * math.sin(lat1_rad),
+    )
+
+    lon1_rad = (lon1_rad + math.pi) % (2 * math.pi) - math.pi
+
+    return math.degrees(lat1_rad), math.degrees(lon1_rad)
+
+
 def compute_trajectory(lat0, lon0):
     """
     Compute realistic drop trajectory. Returns:
@@ -172,14 +204,19 @@ def compute_trajectory(lat0, lon0):
         vhs_list.append(math.hypot(v_h[0], v_h[1]))
         vzs_list.append(abs(v_z))
 
-    # Convert final (x, y) displacement → lat/lon
-    lat1 = lat0 + ys[-1] / 111111.0
-    lon1 = lon0 + xs[-1] / (111111.0 * math.cos(math.radians(lat0)))
-    dist = math.hypot(xs[-1], ys[-1])
-
     dx_final, dy_final = xs[-1], ys[-1]
+    dist = math.hypot(dx_final, dy_final)
     bearing_rad = math.atan2(dx_final, dy_final)
     bearing_deg = (math.degrees(bearing_rad) + 360.0) % 360.0
+
+    lat1, lon1 = displacement_to_latlon(
+        lat0,
+        lon0,
+        dx_final,
+        dy_final,
+        dist=dist,
+        bearing=bearing_rad,
+    )
 
     return lat1, lon1, xs, ys, zs, ts_list, vhs_list, vzs_list, dist, bearing_deg
 
@@ -417,12 +454,7 @@ with col_map:
         # Curved green trajectory
         trajectory_xy = st.session_state["trajectory_xy"]
         lat_lon_points = [
-            [
-                start_lat + (y / 111111.0),
-                start_lon + (
-                    x / (111111.0 * math.cos(math.radians(start_lat)))
-                ),
-            ]
+            list(displacement_to_latlon(start_lat, start_lon, x, y))
             for x, y in trajectory_xy
         ]
         folium.PolyLine(
