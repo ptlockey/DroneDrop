@@ -27,9 +27,10 @@ BASE_POINTS = [2500, 1000, 100]
 # ──────────────────────────────────────────────────────────────────────────────
 # LOAD “naturalearth_cities” & “naturalearth_lowres” FOR LAND‐ONLY / CITY SAMPLING
 # ──────────────────────────────────────────────────────────────────────────────
-_cities_gdf    = None
+_cities_gdf     = None
 _use_land_check = False
-_land_features = []
+_land_features  = []
+_land_geometries = []
 
 try:
     # 1) built‐in “naturalearth_cities” for random city picks
@@ -40,6 +41,7 @@ try:
     land_shp = gpd.datasets.get_path("naturalearth_lowres")
     with fiona.open(land_shp) as src:
         _land_features = list(src)
+    _land_geometries = [shape(feat["geometry"]) for feat in _land_features]
     _use_land_check = True
 
 except Exception:
@@ -48,9 +50,11 @@ except Exception:
         land_shp = gpd.datasets.get_path("naturalearth_lowres")
         with fiona.open(land_shp) as src:
             _land_features = list(src)
+        _land_geometries = [shape(feat["geometry"]) for feat in _land_features]
         _use_land_check = True
     except Exception:
         _land_features = []
+        _land_geometries = []
         _use_land_check = False
 
 
@@ -59,15 +63,14 @@ def get_random_land_point():
     Return (lat, lon) that falls over land (using lowres shapefile) if possible;
     otherwise returns a random lat/lon anywhere.
     """
-    if not _use_land_check or not _land_features:
+    if not _use_land_check or not _land_geometries:
         return random.uniform(-90.0, 90.0), random.uniform(-180.0, 180.0)
 
     while True:
         lat = random.uniform(-90.0, 90.0)
         lon = random.uniform(-180.0, 180.0)
         pt = Point(lon, lat)
-        for feat in _land_features:
-            geom = shape(feat["geometry"])
+        for geom in _land_geometries:
             if geom.contains(pt):
                 return lat, lon
 
