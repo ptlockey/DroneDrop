@@ -11,6 +11,7 @@ from shapely.geometry import shape, Point
 import fiona
 import csv
 from datetime import datetime
+from branca.element import MacroElement, Template
 
 # ──────────────────────────────────────────────────────────────────────────────
 # SETTINGS
@@ -72,6 +73,87 @@ def vector_card(title, heading, speed, *, color, icon):
     """
 
 
+def velocity_calibration_card(*, east_vel, north_vel, fall_time, drift_east, drift_north, drift_total, drift_bearing):
+    """Display a compact card summarizing velocity-derived landing cues."""
+
+    def format_component(value, positive_label, negative_label, unit="m/s"):
+        direction = positive_label if value >= 0 else negative_label
+        return f"{abs(value):.1f} {unit} {direction}"
+
+    def format_drift_component(value, positive_label, negative_label):
+        direction = positive_label if value >= 0 else negative_label
+        return f"{abs(value):.0f} m {direction}"
+
+    drift_direction = f"{drift_bearing:.0f}°"
+    return f"""
+    <div style="border:1px solid rgba(17,24,39,0.1); border-radius:10px; padding:12px; margin-bottom:16px;
+                background:linear-gradient(135deg, rgba(59,130,246,0.08), rgba(59,130,246,0.18));">
+        <div style="font-weight:700; color:#0f172a; margin-bottom:8px;">Velocity Calibration</div>
+        <div style="font-size:13px; color:#1e3a8a; text-transform:uppercase; letter-spacing:0.4px;">Horizontal Components</div>
+        <div style="font-size:14px; color:#111827; font-weight:600;">{format_component(east_vel, 'E', 'W')}</div>
+        <div style="font-size:14px; color:#111827; font-weight:600; margin-bottom:6px;">{format_component(north_vel, 'N', 'S')}</div>
+        <div style="font-size:13px; color:#1e3a8a; text-transform:uppercase; letter-spacing:0.4px;">Fall Time</div>
+        <div style="font-size:14px; color:#111827; font-weight:600;">{fall_time:.1f} s</div>
+        <div style="font-size:13px; color:#1e3a8a; text-transform:uppercase; letter-spacing:0.4px; margin-top:6px;">Estimated Drift</div>
+        <div style="font-size:14px; color:#111827; font-weight:600;">{drift_total:.0f} m ({drift_direction})</div>
+        <div style="font-size:13px; color:#1f2937;">{format_drift_component(drift_east, 'E', 'W')} · {format_drift_component(drift_north, 'N', 'S')}</div>
+    </div>
+    """
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MAP HELPERS
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class SimpleScaleControl(MacroElement):
+    """Custom Leaflet scale control with consistent metric styling."""
+
+    def __init__(self, position="bottomleft", max_width=120):
+        super().__init__()
+        self._name = "SimpleScaleControl"
+        self.position = position
+        self.max_width = max_width
+        self._template = Template(
+            """
+            {% macro script(this, kwargs) %}
+            var simpleScale = L.control.scale({
+                position: '{{this.position}}',
+                maxWidth: {{this.max_width}},
+                metric: true,
+                imperial: false
+            }).addTo({{this._parent.get_name()}});
+            if (simpleScale && simpleScale._container) {
+                simpleScale._container.classList.add('simple-scale');
+            }
+            {% endmacro %}
+
+            {% macro style(this, kwargs) %}
+            .simple-scale {
+                padding:4px 8px;
+                background:rgba(15,23,42,0.82);
+                color:#f9fafb;
+                border-radius:6px;
+                font-size:12px;
+                font-weight:600;
+                box-shadow:0 2px 6px rgba(15,23,42,0.35);
+            }
+            .simple-scale .leaflet-control-scale-line {
+                background:transparent;
+                border:none;
+                border-top:3px solid #f9fafb;
+                color:#f9fafb;
+                text-align:center;
+            }
+            {% endmacro %}
+            """
+        )
+
+
+def add_simple_scale(map_obj, *, position="bottomleft", max_width=120):
+    """Attach the custom metric scale bar to the supplied map."""
+    SimpleScaleControl(position=position, max_width=max_width).add_to(map_obj)
+
 def wedge_coordinates(lat, lon, bearing_deg, spread_deg, distance_m):
     """Return lat/lon coordinates describing a wedge originating at (lat, lon)."""
     if distance_m <= 0:
@@ -119,6 +201,18 @@ except Exception:
         _land_features = []
         _land_geometries = []
         _use_land_check = False
+
+
+def is_land(lat, lon):
+    """Return True if the given coordinate lies over land or checks are unavailable."""
+    if not _use_land_check or not _land_geometries:
+        return True
+
+    pt = Point(lon, lat)
+    for geom in _land_geometries:
+        if geom.contains(pt) or geom.touches(pt):
+            return True
+    return False
 
 
 def get_random_land_point():
@@ -291,34 +385,68 @@ def compute_trajectory(lat0, lon0):
 # NEW ROUND: pick random city (or land), randomize environment + drone params
 # ──────────────────────────────────────────────────────────────────────────────
 def new_round():
-    lat, lon = get_random_city_point()
-    st.session_state["start_lat"] = lat
-    st.session_state["start_lon"] = lon
-
-    st.session_state["surface_temp_c"]     = random.uniform(-20.0, 40.0)
-    st.session_state["surface_pressure_mb"] = random.uniform(950.0, 1050.0)
-    st.session_state["wind_speed"]         = random.uniform(0.0, 40.0)
-    st.session_state["wind_dir"]           = random.uniform(0.0, 359.0)
-    st.session_state["drone_speed"]        = random.uniform(0.0, 30.0)
-    st.session_state["drone_heading"]      = random.uniform(0.0, 359.0)
-    st.session_state["initial_height"]     = random.uniform(0.0, 1000.0)
-    st.session_state["mass"]               = 1.0
-    st.session_state["CdA"]                = random.uniform(0.01, 0.1)
-    st.session_state["h_ref"]              = 10.0
-    st.session_state["alpha"]              = 0.2
-    st.session_state["dt"]                 = 0.01
-
     # reset previous-round state
-    st.session_state["guess"]         = None
-    st.session_state["impact"]        = None
-    st.session_state["trajectory_xy"] = None
+    st.session_state["guess"]          = None
+    st.session_state["impact"]         = None
+    st.session_state["trajectory_xy"]  = None
+    st.session_state["trajectory_samples"] = None
     st.session_state["round_distance"] = None
-    st.session_state["bearing"]       = None
-    st.session_state["error_dist"]    = None
-    st.session_state["round_points"]  = None
-    st.session_state["scored"]        = False
-    st.session_state["round_bonus"]   = 0
+    st.session_state["bearing"]        = None
+    st.session_state["error_dist"]     = None
+    st.session_state["round_points"]   = None
+    st.session_state["scored"]         = False
+    st.session_state["round_bonus"]    = 0
     st.session_state["round_feedback"] = ""
+    st.session_state["fall_time"]      = None
+    st.session_state["drift_vector"]   = (0.0, 0.0)
+
+    while True:
+        lat, lon = get_random_city_point()
+        st.session_state["start_lat"] = lat
+        st.session_state["start_lon"] = lon
+
+        st.session_state["surface_temp_c"]     = random.uniform(-20.0, 40.0)
+        st.session_state["surface_pressure_mb"] = random.uniform(950.0, 1050.0)
+        st.session_state["wind_speed"]         = random.uniform(0.0, 40.0)
+        st.session_state["wind_dir"]           = random.uniform(0.0, 359.0)
+        st.session_state["drone_speed"]        = random.uniform(0.0, 30.0)
+        st.session_state["drone_heading"]      = random.uniform(0.0, 359.0)
+        st.session_state["initial_height"]     = random.uniform(0.0, 1000.0)
+        st.session_state["mass"]               = 1.0
+        st.session_state["CdA"]                = random.uniform(0.01, 0.1)
+        st.session_state["h_ref"]              = 10.0
+        st.session_state["alpha"]              = 0.2
+        st.session_state["dt"]                 = 0.01
+
+        (
+            lat1,
+            lon1,
+            xs,
+            ys,
+            zs,
+            ts_list,
+            vhs_list,
+            vzs_list,
+            impact_dist,
+            bearing_deg,
+        ) = compute_trajectory(lat, lon)
+
+        if is_land(lat1, lon1):
+            st.session_state["impact"] = (lat1, lon1)
+            st.session_state["trajectory_xy"] = list(zip(xs, ys))
+            st.session_state["trajectory_samples"] = {
+                "times": ts_list,
+                "vhs": vhs_list,
+                "vzs": vzs_list,
+            }
+            st.session_state["round_distance"] = impact_dist
+            st.session_state["bearing"] = bearing_deg
+            fall_time = ts_list[-1] if ts_list else 0.0
+            drift_east = xs[-1] if xs else 0.0
+            drift_north = ys[-1] if ys else 0.0
+            st.session_state["fall_time"] = fall_time
+            st.session_state["drift_vector"] = (drift_east, drift_north)
+            break
 
 
 # Initialize once
@@ -547,8 +675,9 @@ with col_map:
             location=[start_lat, start_lon],
             zoom_start=16,
             tiles="OpenStreetMap",
-            control_scale=True,
+            control_scale=False,
         )
+        add_simple_scale(base_map)
         folium.Marker(
             [start_lat, start_lon],
             tooltip="Drone Start",
@@ -595,25 +724,6 @@ with col_map:
             lat_clicked = map_data["last_clicked"]["lat"]
             lon_clicked = map_data["last_clicked"]["lng"]
             st.session_state["guess"] = (lat_clicked, lon_clicked)
-
-            # Immediately compute trajectory
-            (
-                lat1,
-                lon1,
-                xs,
-                ys,
-                zs,
-                ts_list,
-                vhs_list,
-                vzs_list,
-                impact_dist,
-                bearing_deg,
-            ) = compute_trajectory(start_lat, start_lon)
-
-            st.session_state["impact"] = (lat1, lon1)
-            st.session_state["trajectory_xy"] = list(zip(xs, ys))
-            st.session_state["round_distance"] = impact_dist
-            st.session_state["bearing"] = bearing_deg
 
             # Compute error (haversine) between guess & impact
             def haversine(coord1, coord2):
@@ -705,8 +815,9 @@ with col_map:
             location=[start_lat, start_lon],
             zoom_start=16,
             tiles="OpenStreetMap",
-            control_scale=True,
+            control_scale=False,
         )
+        add_simple_scale(overlay_map)
         folium.Marker(
             [start_lat, start_lon],
             tooltip="Drone Start",
@@ -828,6 +939,28 @@ with col_vecs:
             drone_spd,
             color="#dc2626",
             icon="🚁",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    drift_east, drift_north = st.session_state.get("drift_vector", (0.0, 0.0))
+    fall_time = st.session_state.get("fall_time") or 0.0
+    drift_total = st.session_state.get("round_distance")
+    if drift_total is None:
+        drift_total = math.hypot(drift_east, drift_north)
+    drift_bearing = st.session_state.get("bearing") or 0.0
+    east_vel = drone_spd * math.sin(math.radians(drone_h))
+    north_vel = drone_spd * math.cos(math.radians(drone_h))
+
+    st.markdown(
+        velocity_calibration_card(
+            east_vel=east_vel,
+            north_vel=north_vel,
+            fall_time=fall_time,
+            drift_east=drift_east,
+            drift_north=drift_north,
+            drift_total=drift_total,
+            drift_bearing=drift_bearing,
         ),
         unsafe_allow_html=True,
     )
