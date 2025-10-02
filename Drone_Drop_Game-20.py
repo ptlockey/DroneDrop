@@ -25,6 +25,69 @@ BASE_POINTS = [2500, 1000, 100]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# UI HELPERS
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def metric_card(label, value, *, accent="#1f77b4", subtext=""):
+    """Render a compact metric card for the sidebar."""
+    return f"""
+    <div style="background:rgba(31, 119, 180, 0.08); border-left:4px solid {accent};
+                padding:8px 10px; border-radius:6px; margin-bottom:6px;">
+        <div style="font-size:12px; text-transform:uppercase; letter-spacing:0.5px;
+                    color:#4b5563;">{label}</div>
+        <div style="font-size:18px; font-weight:700; color:#111827;">{value}</div>
+        <div style="font-size:12px; color:#6b7280;">{subtext}</div>
+    </div>
+    """
+
+
+def vector_card(title, heading, speed, *, color, icon):
+    """Render a styled vector card with a rotated arrow icon."""
+    arrow = (
+        f"<div style='width:54px; height:54px; margin:0 auto; display:flex; align-items:center;"
+        f" justify-content:center; border-radius:50%; background:rgba(17,24,39,0.05);"
+        f" color:{color}; transform:rotate({heading}deg); font-size:28px; transition:transform 0.3s;'>"
+        "↑"
+        "</div>"
+    )
+    return f"""
+    <div style="border:1px solid rgba(17, 24, 39, 0.1); border-radius:10px; padding:12px;
+                background:linear-gradient(135deg, rgba(17,24,39,0.02), rgba(17,24,39,0.06));
+                margin-bottom:16px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+            <div style="font-weight:700; color:#111827;">{title}</div>
+            <div style="color:{color}; font-size:16px;">{icon}</div>
+        </div>
+        <div style="display:flex; gap:12px; align-items:center;">
+            {arrow}
+            <div>
+                <div style="font-size:14px; color:#4b5563;">Heading</div>
+                <div style="font-weight:600; color:#111827;">{heading:.0f}°</div>
+                <div style="font-size:14px; color:#4b5563; margin-top:6px;">Speed</div>
+                <div style="font-weight:600; color:#111827;">{speed:.0f} m/s</div>
+            </div>
+        </div>
+    </div>
+    """
+
+
+def wedge_coordinates(lat, lon, bearing_deg, spread_deg, distance_m):
+    """Return lat/lon coordinates describing a wedge originating at (lat, lon)."""
+    if distance_m <= 0:
+        return []
+    half = spread_deg / 2.0
+    bearings = np.linspace(bearing_deg - half, bearing_deg + half, num=6)
+    points = []
+    for b in bearings:
+        b_rad = math.radians((b + 360.0) % 360.0)
+        dx = distance_m * math.sin(b_rad)
+        dy = distance_m * math.cos(b_rad)
+        points.append(displacement_to_latlon(lat, lon, dx, dy, dist=distance_m, bearing=b_rad))
+    return [(lat, lon)] + points + [(lat, lon)]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # LOAD “naturalearth_cities” & “naturalearth_lowres” FOR LAND‐ONLY / CITY SAMPLING
 # ──────────────────────────────────────────────────────────────────────────────
 _cities_gdf     = None
@@ -254,12 +317,20 @@ def new_round():
     st.session_state["error_dist"]    = None
     st.session_state["round_points"]  = None
     st.session_state["scored"]        = False
+    st.session_state["round_bonus"]   = 0
+    st.session_state["round_feedback"] = ""
 
 
 # Initialize once
 if "initialized" not in st.session_state:
     st.session_state["initialized"] = True
     st.session_state["score"]       = 0
+    st.session_state["rounds_played"] = 0
+    st.session_state["total_error"]   = 0.0
+    st.session_state["hits"]          = 0
+    st.session_state["streak"]        = 0
+    st.session_state["best_error"]    = None
+    st.session_state["round_history"] = []
     new_round()
 
 
@@ -275,50 +346,162 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+st.markdown(
+    """
+    <style>
+    .main .block-container{
+        padding-top: 1.5rem;
+        padding-bottom: 1rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 # ──────────────────────────────────────────────────────────────────────────────
-# LEFT SIDEBAR: CONTROLS, DIFFICULTY, ENVIRONMENT & SCORE
+# LEFT SIDEBAR: CONTROLS, METRICS, ENVIRONMENT
 # ──────────────────────────────────────────────────────────────────────────────
-st.sidebar.header("🏷️ Controls")
-if st.sidebar.button("Next Drop"):
-    new_round()
-if st.sidebar.button("Exit & Save"):
-    try:
-        with open("high_scores.csv", "a", newline="") as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow([datetime.now().isoformat(), st.session_state["score"]])
-        st.sidebar.success("✅ Score saved")
-    except Exception as e:
-        st.sidebar.error(f"Error saving score: {e}")
+st.sidebar.markdown("## 🎮 Mission Control")
+control_col1, control_col2 = st.sidebar.columns(2)
+with control_col1:
+    if control_col1.button("Next Drop", key="next_drop"):
+        new_round()
+with control_col2:
+    if control_col2.button("Exit & Save", key="exit_save"):
+        try:
+            with open("high_scores.csv", "a", newline="") as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow([datetime.now().isoformat(), st.session_state["score"]])
+            control_col2.success("✅ Score saved")
+        except Exception as e:
+            control_col2.error(f"Error saving score: {e}")
 
 st.sidebar.markdown("---")
 
-# Difficulty radio (compact)
 if "difficulty" not in st.session_state:
     st.session_state["difficulty"] = "Hard"
-st.sidebar.markdown("<div style='margin-bottom:4px; font-weight:bold;'>🎚️ Difficulty</div>", unsafe_allow_html=True)
+st.sidebar.markdown("### 🎚️ Difficulty")
 st.session_state["difficulty"] = st.sidebar.radio(
-    "", ["Easy", "Medium", "Hard"],
+    "Select challenge", ["Easy", "Medium", "Hard"],
     index=["Easy", "Medium", "Hard"].index(st.session_state["difficulty"])
 )
 
 st.sidebar.markdown("---")
 
-# Environment & Score (compact)
-st.sidebar.header("🏷️ Environment & Score")
-colA, colB = st.sidebar.columns(2)
-with colA:
-    st.write(f"**Score:** {st.session_state['score']}")
-    st.write(f"T₀: {st.session_state['surface_temp_c']:.0f} °C")
-    st.write(f"P₀: {st.session_state['surface_pressure_mb']:.0f} mb")
-    st.write(f"Wind from: {st.session_state['wind_dir']:.0f}°")
-with colB:
-    st.write(" ")
-    st.write(f"Wind spd: {st.session_state['wind_speed']:.0f} m/s")
-    st.write(f"Dr Hdg: {st.session_state['drone_heading']:.0f}°")
-    st.write(f"Dr Spd: {st.session_state['drone_speed']:.0f} m/s")
-    st.write(f"Alt: {st.session_state['initial_height']:.0f} m")
-    st.write(f"CdA: {st.session_state['CdA']:.2f} m²")
-    st.write(f"Mass: {st.session_state['mass']:.1f} kg")
+rounds_played = st.session_state["rounds_played"]
+total_error = st.session_state["total_error"]
+hits = st.session_state["hits"]
+avg_error = total_error / rounds_played if rounds_played else 0.0
+hit_rate = hits / rounds_played if rounds_played else 0.0
+
+st.sidebar.markdown("### 📊 Flight Report")
+st.sidebar.markdown(
+    metric_card("Score", f"{st.session_state['score']:,}", accent="#2563eb", subtext="Total mission points"),
+    unsafe_allow_html=True,
+)
+st.sidebar.markdown(
+    metric_card(
+        "Rounds", f"{rounds_played}", accent="#10b981",
+        subtext="Flights completed"
+    ),
+    unsafe_allow_html=True,
+)
+avg_text = f"{avg_error:.1f} m" if rounds_played else "—"
+st.sidebar.markdown(
+    metric_card("Avg. Error", avg_text, accent="#f59e0b", subtext="Across all drops"),
+    unsafe_allow_html=True,
+)
+st.sidebar.markdown(
+    metric_card(
+        "Hit Rate",
+        f"{hit_rate * 100:0.0f}%" if rounds_played else "—",
+        accent="#8b5cf6",
+        subtext="Within scoring rings"
+    ),
+    unsafe_allow_html=True,
+)
+
+accuracy_target = min(hit_rate, 1.0)
+st.sidebar.progress(accuracy_target)
+st.sidebar.caption("Build consecutive hits to trigger streak bonuses.")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🌦️ Conditions")
+env_col1, env_col2 = st.sidebar.columns(2)
+with env_col1:
+    st.markdown(
+        metric_card(
+            "Surface Temp",
+            f"{st.session_state['surface_temp_c']:.0f} °C",
+            accent="#ef4444",
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        metric_card(
+            "Pressure",
+            f"{st.session_state['surface_pressure_mb']:.0f} mb",
+            accent="#0ea5e9",
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        metric_card(
+            "Wind From",
+            f"{st.session_state['wind_dir']:.0f}°",
+            accent="#22c55e",
+        ),
+        unsafe_allow_html=True,
+    )
+with env_col2:
+    st.markdown(
+        metric_card(
+            "Wind Speed",
+            f"{st.session_state['wind_speed']:.0f} m/s",
+            accent="#14b8a6",
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        metric_card(
+            "Drone Hdg",
+            f"{st.session_state['drone_heading']:.0f}°",
+            accent="#f97316",
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        metric_card(
+            "Drone Spd",
+            f"{st.session_state['drone_speed']:.0f} m/s",
+            accent="#38bdf8",
+        ),
+        unsafe_allow_html=True,
+    )
+st.sidebar.markdown(
+    metric_card(
+        "Drop Altitude",
+        f"{st.session_state['initial_height']:.0f} m",
+        accent="#a855f7",
+    ),
+    unsafe_allow_html=True,
+)
+st.sidebar.markdown(
+    metric_card(
+        "CdA",
+        f"{st.session_state['CdA']:.2f} m²",
+        accent="#f472b6",
+    ),
+    unsafe_allow_html=True,
+)
+st.sidebar.markdown(
+    metric_card(
+        "Mass",
+        f"{st.session_state['mass']:.1f} kg",
+        accent="#9ca3af",
+    ),
+    unsafe_allow_html=True,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -371,6 +554,35 @@ with col_map:
             tooltip="Drone Start",
             icon=folium.Icon(icon="plane", prefix="fa", color="blue"),
         ).add_to(base_map)
+
+        wind_dir_from = st.session_state["wind_dir"]
+        wind_speed = st.session_state["wind_speed"]
+        wind_to = (wind_dir_from + 180.0) % 360.0
+        cone_distance = max(150.0, wind_speed * 80.0)
+        cone_points = wedge_coordinates(start_lat, start_lon, wind_to, 35.0, cone_distance)
+        if cone_points:
+            folium.Polygon(
+                cone_points,
+                color="#2563eb",
+                weight=1,
+                fill=True,
+                fill_opacity=0.15,
+                tooltip="Projected wind cone",
+            ).add_to(base_map)
+            axis_lat, axis_lon = displacement_to_latlon(
+                start_lat,
+                start_lon,
+                cone_distance * math.sin(math.radians(wind_to)),
+                cone_distance * math.cos(math.radians(wind_to)),
+                dist=cone_distance,
+                bearing=math.radians(wind_to),
+            )
+            folium.PolyLine(
+                [[start_lat, start_lon], [axis_lat, axis_lon]],
+                color="#1d4ed8",
+                weight=3,
+                tooltip="Wind drift axis",
+            ).add_to(base_map)
 
         map_data = st_folium(
             base_map,
@@ -432,8 +644,55 @@ with col_map:
             else:
                 pts = 0
 
-            st.session_state["score"] += pts
+            st.session_state["rounds_played"] += 1
+            st.session_state["total_error"] += error_dist
+            if error_dist <= R2:
+                st.session_state["hits"] += 1
+
+            if error_dist <= R2:
+                st.session_state["streak"] += 1
+            else:
+                st.session_state["streak"] = 0
+
+            bonus = 0
+            feedback_parts = []
+
+            if error_dist <= R1:
+                bullseye_bonus = 150
+                bonus += bullseye_bonus
+                feedback_parts.append(f"Bullseye bonus +{bullseye_bonus}")
+
+            streak = st.session_state["streak"]
+            if streak >= 3:
+                streak_bonus = 100 * (streak - 2)
+                bonus += streak_bonus
+                feedback_parts.append(f"Hot streak ×{streak} +{streak_bonus}")
+
+            prev_best = st.session_state["best_error"]
+            if prev_best is None or error_dist < prev_best:
+                st.session_state["best_error"] = error_dist
+                personal_best_bonus = 100
+                bonus += personal_best_bonus
+                feedback_parts.append(f"New personal best +{personal_best_bonus}")
+
+            if error_dist > 0 and error_dist <= R3:
+                accuracy_bonus = int(max(0.0, (R3 - error_dist) / R3) * 120)
+                if accuracy_bonus:
+                    bonus += accuracy_bonus
+                    feedback_parts.append(f"Accuracy bonus +{accuracy_bonus}")
+
+            st.session_state["score"] += pts + bonus
             st.session_state["round_points"] = pts
+            st.session_state["round_bonus"] = bonus
+            st.session_state["round_feedback"] = ", ".join(feedback_parts) if feedback_parts else "Keep refining your approach."
+            st.session_state["round_history"].append(
+                {
+                    "timestamp": datetime.now().isoformat(),
+                    "error": error_dist,
+                    "points": pts,
+                    "bonus": bonus,
+                }
+            )
             st.session_state["scored"] = True
             # Now guess & trajectory_xy exist → draw overlay next
 
@@ -453,6 +712,28 @@ with col_map:
             tooltip="Drone Start",
             icon=folium.Icon(icon="plane", prefix="fa", color="blue"),
         ).add_to(overlay_map)
+
+        if st.session_state["rounds_played"] > 1 and st.session_state["total_error"] > 0:
+            avg_error_radius = st.session_state["total_error"] / st.session_state["rounds_played"]
+            folium.Circle(
+                location=[start_lat, start_lon],
+                radius=avg_error_radius,
+                color="#7c3aed",
+                weight=1,
+                fill=True,
+                fill_opacity=0.08,
+                tooltip="Average error radius",
+            ).add_to(overlay_map)
+        if st.session_state["best_error"] is not None:
+            folium.Circle(
+                location=[start_lat, start_lon],
+                radius=st.session_state["best_error"],
+                color="#10b981",
+                weight=2,
+                fill=False,
+                dash_array="6,6",
+                tooltip="Personal best radius",
+            ).add_to(overlay_map)
 
         # Curved green trajectory
         trajectory_xy = st.session_state["trajectory_xy"]
@@ -491,6 +772,13 @@ with col_map:
             fill_opacity=0.2,
         ).add_to(overlay_map)
 
+        folium.PolyLine(
+            [[start_lat, start_lon], [guess_lat, guess_lon]],
+            color="#fb923c",
+            weight=2,
+            tooltip="Your bearing",
+        ).add_to(overlay_map)
+
         # Actual impact marker + dashed line from start→impact
         impact_lat, impact_lon = st.session_state["impact"]
         folium.Marker(
@@ -515,63 +803,113 @@ with col_map:
 # RIGHT COLUMN: WIND & DRONE VECTOR BOXES (tight margins)
 # ──────────────────────────────────────────────────────────────────────────────
 with col_vecs:
-    # Wind Vector Box
-    st.markdown(
-        '<div style="border:1px solid #333; padding:8px; border-radius:8px; margin-bottom:12px;">'
-        '<div style="font-size:16px; font-weight:bold; margin-bottom:6px;">'
-        'Wind Vector</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown("### 📐 Vector Overview")
     wind_dir = st.session_state["wind_dir"]       # from-heading
-    wind_to  = (wind_dir + 180.0) % 360.0         # arrow points “to” this heading
     wind_spd = st.session_state["wind_speed"]
-    wind_len = int(wind_spd * VECTOR_SCALE)
+    wind_to  = (wind_dir + 180.0) % 360.0         # arrow points “to” this heading
+
     st.markdown(
-        f'<div style="text-align:center; margin-bottom:16px;">'
-        f'<div style="font-size:14px;">Heading: {wind_dir:.0f}° (from)</div>'
-        f'<div style="font-size:14px;">Speed: {wind_spd:.0f} m/s</div>'
-        f'<div style="font-size:{wind_len}px; transform: rotate({wind_to}deg); '
-        'display:inline-block; color:#1f77b4; margin-top:6px;">↑</div>'
-        '</div>',
+        vector_card(
+            "Wind Vector",
+            wind_to,
+            wind_spd,
+            color="#2563eb",
+            icon="🌬️",
+        ),
         unsafe_allow_html=True,
     )
 
-    # Drone Vector Box
-    st.markdown(
-        '<div style="border:1px solid #333; padding:8px; border-radius:8px; margin-bottom:12px;">'
-        '<div style="font-size:16px; font-weight:bold; margin-bottom:6px;">'
-        'Drone Vector</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-    drone_h   = st.session_state["drone_heading"]   # heading
-    drone_to  = drone_h                             # arrow points in that direction
+    drone_h   = st.session_state["drone_heading"]
     drone_spd = st.session_state["drone_speed"]
-    drone_len = int(drone_spd * VECTOR_SCALE)
     st.markdown(
-        f'<div style="text-align:center; margin-bottom:16px;">'
-        f'<div style="font-size:14px;">Heading: {drone_h:.0f}°</div>'
-        f'<div style="font-size:14px;">Speed: {drone_spd:.0f} m/s</div>'
-        f'<div style="font-size:{drone_len}px; transform: rotate({drone_to}deg); '
-        'display:inline-block; color:#d62728; margin-top:6px;">↑</div>'
-        '</div>',
+        vector_card(
+            "Drone Vector",
+            drone_h,
+            drone_spd,
+            color="#dc2626",
+            icon="🚁",
+        ),
+        unsafe_allow_html=True,
+    )
+
+    st.caption("Wind heading indicates the direction the gust pushes the payload toward.")
+
+    streak = st.session_state["streak"]
+    round_points = st.session_state.get("round_points") or 0
+    round_bonus = st.session_state.get("round_bonus", 0)
+    insight_text = st.session_state["round_feedback"] or "Make a prediction to earn rewards."
+    st.markdown(
+        f"""
+        <div style="border:1px solid rgba(17,24,39,0.1); border-radius:10px; padding:12px;
+                    background:rgba(17,24,39,0.02);">
+            <div style="font-weight:600; color:#111827; margin-bottom:6px;">Round Insight</div>
+            <div style="font-size:13px; color:#4b5563;">Base points: <strong>{round_points}</strong></div>
+            <div style="font-size:13px; color:#4b5563;">Bonus: <strong>{round_bonus}</strong></div>
+            <div style="font-size:13px; color:#4b5563;">Current streak: <strong>{streak}</strong></div>
+            <div style="font-size:13px; color:#4b5563; margin-top:6px;">{insight_text}</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# FULL-WIDTH BOTTOM BAR: “Round result: Error xxx m”
+# BOTTOM SUMMARY BAR WITH ACCURACY + BONUS CALLOUTS
 # ──────────────────────────────────────────────────────────────────────────────
-if st.session_state["scored"]:
-    error_display = f"Round result: Error {st.session_state['error_dist']:.1f} m"
-else:
-    error_display = "Round result: Error — (making guess…)"
+summary_col1, summary_col2 = st.columns((3, 1))
 
-st.markdown(
-    f'<div style="border-top:2px solid #333; padding:8px; margin-top:12px; '
-    'font-size:16px; font-weight:bold; text-align:center;">'
-    f'{error_display}'
-    '</div>',
-    unsafe_allow_html=True,
-)
+with summary_col1:
+    if st.session_state["scored"]:
+        error_val = st.session_state["error_dist"]
+        round_points = st.session_state.get("round_points", 0)
+        round_bonus = st.session_state.get("round_bonus", 0)
+        total_round = round_points + round_bonus
+        summary_title = f"Error {error_val:.1f} m"
+        summary_detail = (
+            f"Gained <strong>{total_round}</strong> pts · Base {round_points} / Bonus {round_bonus}"
+        )
+        footer_text = st.session_state.get("round_feedback", "")
+    else:
+        summary_title = "Awaiting guess"
+        summary_detail = "Click on the map to lock in your prediction."
+        footer_text = ""
+
+    st.markdown(
+        f"""
+        <div style="border-top:2px solid rgba(17,24,39,0.12); padding:16px 18px; margin-top:12px;">
+            <div style="font-size:18px; font-weight:700; color:#111827;">{summary_title}</div>
+            <div style="font-size:14px; color:#4b5563; margin-top:2px;">{summary_detail}</div>
+            <div style="font-size:13px; color:#6b7280; margin-top:6px;">{footer_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with summary_col2:
+    rounds_played = st.session_state["rounds_played"]
+    if rounds_played:
+        avg_error = st.session_state["total_error"] / rounds_played
+        hit_rate = st.session_state["hits"] / rounds_played
+        st.markdown(
+            f"""
+            <div style="border:1px solid rgba(17,24,39,0.12); border-radius:10px; padding:12px; margin-top:12px;">
+                <div style="font-size:13px; color:#4b5563;">Avg error</div>
+                <div style="font-weight:600; color:#111827;">{avg_error:.1f} m</div>
+                <div style="font-size:13px; color:#4b5563; margin-top:8px;">Hit rate</div>
+                <div style="font-weight:600; color:#111827;">{hit_rate*100:0.0f}%</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            """
+            <div style="border:1px solid rgba(17,24,39,0.12); border-radius:10px; padding:12px; margin-top:12px;">
+                <div style="font-size:13px; color:#4b5563;">Avg error</div>
+                <div style="font-weight:600; color:#111827;">—</div>
+                <div style="font-size:13px; color:#4b5563; margin-top:8px;">Hit rate</div>
+                <div style="font-weight:600; color:#111827;">—</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
