@@ -6,9 +6,6 @@ from streamlit_folium import st_folium
 import random
 import math
 import numpy as np
-import geopandas as gpd
-from shapely.geometry import shape, Point
-import fiona
 import csv
 from datetime import datetime
 from branca.element import MacroElement, Template
@@ -170,79 +167,83 @@ def wedge_coordinates(lat, lon, bearing_deg, spread_deg, distance_m):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# LOAD “naturalearth_cities” & “naturalearth_lowres” FOR LAND‐ONLY / CITY SAMPLING
+# BUILT-UP LOCATION CATALOG & HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
-_cities_gdf     = None
-_use_land_check = False
-_land_features  = []
-_land_geometries = []
 
-try:
-    # 1) built‐in “naturalearth_cities” for random city picks
-    cities_path = gpd.datasets.get_path("naturalearth_cities")
-    _cities_gdf = gpd.read_file(cities_path)
+BUILT_UP_LOCATIONS = [
+    {"name": "Addis Ababa", "country": "Ethiopia", "lat": 8.9806, "lon": 38.7578, "max_radius_km": 22},
+    {"name": "Nairobi", "country": "Kenya", "lat": -1.2864, "lon": 36.8172, "max_radius_km": 18},
+    {"name": "Abuja", "country": "Nigeria", "lat": 9.0765, "lon": 7.3986, "max_radius_km": 20},
+    {"name": "Johannesburg", "country": "South Africa", "lat": -26.2041, "lon": 28.0473, "max_radius_km": 22},
+    {"name": "Lusaka", "country": "Zambia", "lat": -15.3875, "lon": 28.3228, "max_radius_km": 20},
+    {"name": "Harare", "country": "Zimbabwe", "lat": -17.8249, "lon": 31.053, "max_radius_km": 18},
+    {"name": "Riyadh", "country": "Saudi Arabia", "lat": 24.7136, "lon": 46.6753, "max_radius_km": 25},
+    {"name": "Tehran", "country": "Iran", "lat": 35.6892, "lon": 51.389, "max_radius_km": 20},
+    {"name": "Ulaanbaatar", "country": "Mongolia", "lat": 47.8864, "lon": 106.9057, "max_radius_km": 22},
+    {"name": "Chengdu", "country": "China", "lat": 30.5728, "lon": 104.0668, "max_radius_km": 20},
+    {"name": "Xi'an", "country": "China", "lat": 34.3416, "lon": 108.9398, "max_radius_km": 20},
+    {"name": "Bengaluru", "country": "India", "lat": 12.9716, "lon": 77.5946, "max_radius_km": 18},
+    {"name": "Hyderabad", "country": "India", "lat": 17.385, "lon": 78.4867, "max_radius_km": 18},
+    {"name": "Kathmandu", "country": "Nepal", "lat": 27.7172, "lon": 85.324, "max_radius_km": 15},
+    {"name": "Ankara", "country": "Turkey", "lat": 39.9334, "lon": 32.8597, "max_radius_km": 20},
+    {"name": "Tashkent", "country": "Uzbekistan", "lat": 41.2995, "lon": 69.2401, "max_radius_km": 20},
+    {"name": "Almaty", "country": "Kazakhstan", "lat": 43.222, "lon": 76.8512, "max_radius_km": 20},
+    {"name": "Isfahan", "country": "Iran", "lat": 32.6546, "lon": 51.668, "max_radius_km": 20},
+    {"name": "Ranchi", "country": "India", "lat": 23.3441, "lon": 85.3096, "max_radius_km": 18},
+    {"name": "Kunming", "country": "China", "lat": 25.0389, "lon": 102.7183, "max_radius_km": 18},
+    {"name": "Madrid", "country": "Spain", "lat": 40.4168, "lon": -3.7038, "max_radius_km": 22},
+    {"name": "Paris", "country": "France", "lat": 48.8566, "lon": 2.3522, "max_radius_km": 18},
+    {"name": "Berlin", "country": "Germany", "lat": 52.52, "lon": 13.405, "max_radius_km": 20},
+    {"name": "Warsaw", "country": "Poland", "lat": 52.2297, "lon": 21.0122, "max_radius_km": 20},
+    {"name": "Vienna", "country": "Austria", "lat": 48.2082, "lon": 16.3738, "max_radius_km": 18},
+    {"name": "Munich", "country": "Germany", "lat": 48.1351, "lon": 11.582, "max_radius_km": 18},
+    {"name": "Prague", "country": "Czechia", "lat": 50.0755, "lon": 14.4378, "max_radius_km": 18},
+    {"name": "Budapest", "country": "Hungary", "lat": 47.4979, "lon": 19.0402, "max_radius_km": 18},
+    {"name": "Milan", "country": "Italy", "lat": 45.4642, "lon": 9.19, "max_radius_km": 18},
+    {"name": "Zaragoza", "country": "Spain", "lat": 41.6488, "lon": -0.8891, "max_radius_km": 18},
+    {"name": "Krakow", "country": "Poland", "lat": 50.0647, "lon": 19.945, "max_radius_km": 18},
+    {"name": "Denver", "country": "United States", "lat": 39.7392, "lon": -104.9903, "max_radius_km": 20},
+    {"name": "Dallas", "country": "United States", "lat": 32.7767, "lon": -96.797, "max_radius_km": 20},
+    {"name": "Phoenix", "country": "United States", "lat": 33.4484, "lon": -112.074, "max_radius_km": 20},
+    {"name": "Las Vegas", "country": "United States", "lat": 36.1699, "lon": -115.1398, "max_radius_km": 18},
+    {"name": "Atlanta", "country": "United States", "lat": 33.749, "lon": -84.388, "max_radius_km": 20},
+    {"name": "Calgary", "country": "Canada", "lat": 51.0447, "lon": -114.0719, "max_radius_km": 20},
+    {"name": "Edmonton", "country": "Canada", "lat": 53.5461, "lon": -113.4938, "max_radius_km": 20},
+    {"name": "Mexico City", "country": "Mexico", "lat": 19.4326, "lon": -99.1332, "max_radius_km": 20},
+    {"name": "Guadalajara", "country": "Mexico", "lat": 20.6597, "lon": -103.3496, "max_radius_km": 20},
+    {"name": "Monterrey", "country": "Mexico", "lat": 25.6866, "lon": -100.3161, "max_radius_km": 20},
+    {"name": "Bogotá", "country": "Colombia", "lat": 4.711, "lon": -74.0721, "max_radius_km": 20},
+    {"name": "Quito", "country": "Ecuador", "lat": -0.1807, "lon": -78.4678, "max_radius_km": 18},
+    {"name": "La Paz", "country": "Bolivia", "lat": -16.4897, "lon": -68.1193, "max_radius_km": 18},
+    {"name": "Cordoba", "country": "Argentina", "lat": -31.4201, "lon": -64.1888, "max_radius_km": 20},
+    {"name": "Belo Horizonte", "country": "Brazil", "lat": -19.9167, "lon": -43.9345, "max_radius_km": 20},
+    {"name": "Rosario", "country": "Argentina", "lat": -32.9442, "lon": -60.6505, "max_radius_km": 20},
+    {"name": "Alice Springs", "country": "Australia", "lat": -23.698, "lon": 133.8807, "max_radius_km": 15},
+    {"name": "Toowoomba", "country": "Australia", "lat": -27.5598, "lon": 151.9507, "max_radius_km": 15},
+    {"name": "Canberra", "country": "Australia", "lat": -35.2809, "lon": 149.13, "max_radius_km": 15},
+]
 
-    # 2) built‐in “naturalearth_lowres” for land‐only fallback
-    land_shp = gpd.datasets.get_path("naturalearth_lowres")
-    with fiona.open(land_shp) as src:
-        _land_features = list(src)
-    _land_geometries = [shape(feat["geometry"]) for feat in _land_features]
-    _use_land_check = True
 
-except Exception:
-    _cities_gdf = None
-    try:
-        land_shp = gpd.datasets.get_path("naturalearth_lowres")
-        with fiona.open(land_shp) as src:
-            _land_features = list(src)
-        _land_geometries = [shape(feat["geometry"]) for feat in _land_features]
-        _use_land_check = True
-    except Exception:
-        _land_features = []
-        _land_geometries = []
-        _use_land_check = False
+def select_built_up_location():
+    """Return a random built-up location descriptor."""
+
+    if not BUILT_UP_LOCATIONS:
+        raise RuntimeError("No built-up locations configured.")
+    return random.choice(BUILT_UP_LOCATIONS)
 
 
-def is_land(lat, lon):
-    """Return True if the given coordinate lies over land or checks are unavailable."""
-    if not _use_land_check or not _land_geometries:
-        return True
+def path_within_radius(xs, ys, radius_m, *, tolerance=5.0):
+    """Ensure every sampled point stays within the allowed radius."""
 
-    pt = Point(lon, lat)
-    for geom in _land_geometries:
-        if geom.contains(pt) or geom.touches(pt):
-            return True
-    return False
-
-
-def get_random_land_point():
-    """
-    Return (lat, lon) that falls over land (using lowres shapefile) if possible;
-    otherwise returns a random lat/lon anywhere.
-    """
-    if not _use_land_check or not _land_geometries:
-        return random.uniform(-90.0, 90.0), random.uniform(-180.0, 180.0)
-
-    while True:
-        lat = random.uniform(-90.0, 90.0)
-        lon = random.uniform(-180.0, 180.0)
-        pt = Point(lon, lat)
-        for geom in _land_geometries:
-            if geom.contains(pt):
-                return lat, lon
+    radius_limit = max(radius_m, 0.0) + tolerance
+    return all(math.hypot(x, y) <= radius_limit for x, y in zip(xs, ys))
 
 
 def get_random_city_point():
-    """
-    Return (lat, lon) of a random city from “naturalearth_cities” if available;
-    otherwise fallback to get_random_land_point().
-    """
-    if _cities_gdf is not None and not _cities_gdf.empty:
-        row = _cities_gdf.sample(n=1).iloc[0]
-        return float(row.geometry.y), float(row.geometry.x)
-    else:
-        return get_random_land_point()
+    """Return (lat, lon, metadata) for a curated built-up area."""
 
+    location = select_built_up_location()
+    return float(location["lat"]), float(location["lon"]), location
 
 # ──────────────────────────────────────────────────────────────────────────────
 # TRAJECTORY COMPUTATION (drag, density, wind shear; CdA ≤ 0.1)
@@ -400,8 +401,16 @@ def new_round():
     st.session_state["fall_time"]      = None
     st.session_state["drift_vector"]   = (0.0, 0.0)
 
+    attempts = 0
     while True:
-        lat, lon = get_random_city_point()
+        attempts += 1
+        if attempts > 300:
+            st.error("Unable to generate a built-up drop zone. Please try again.")
+            st.stop()
+
+        lat, lon, location = get_random_city_point()
+        radius_m = float(location["max_radius_km"]) * 1_000.0
+
         st.session_state["start_lat"] = lat
         st.session_state["start_lon"] = lon
 
@@ -431,22 +440,32 @@ def new_round():
             bearing_deg,
         ) = compute_trajectory(lat, lon)
 
-        if is_land(lat1, lon1):
-            st.session_state["impact"] = (lat1, lon1)
-            st.session_state["trajectory_xy"] = list(zip(xs, ys))
-            st.session_state["trajectory_samples"] = {
-                "times": ts_list,
-                "vhs": vhs_list,
-                "vzs": vzs_list,
-            }
-            st.session_state["round_distance"] = impact_dist
-            st.session_state["bearing"] = bearing_deg
-            fall_time = ts_list[-1] if ts_list else 0.0
-            drift_east = xs[-1] if xs else 0.0
-            drift_north = ys[-1] if ys else 0.0
-            st.session_state["fall_time"] = fall_time
-            st.session_state["drift_vector"] = (drift_east, drift_north)
-            break
+        if impact_dist > radius_m:
+            continue
+
+        if not path_within_radius(xs, ys, radius_m):
+            continue
+
+        st.session_state["impact"] = (lat1, lon1)
+        st.session_state["trajectory_xy"] = list(zip(xs, ys))
+        st.session_state["trajectory_samples"] = {
+            "times": ts_list,
+            "vhs": vhs_list,
+            "vzs": vzs_list,
+        }
+        st.session_state["round_distance"] = impact_dist
+        st.session_state["bearing"] = bearing_deg
+        st.session_state["start_location"] = location
+        st.session_state["start_location_label"] = location["name"]
+        st.session_state["start_location_country"] = location["country"]
+        st.session_state["safe_radius_km"] = float(location["max_radius_km"])
+        st.session_state["safe_radius_m"] = radius_m
+        fall_time = ts_list[-1] if ts_list else 0.0
+        drift_east = xs[-1] if xs else 0.0
+        drift_north = ys[-1] if ys else 0.0
+        st.session_state["fall_time"] = fall_time
+        st.session_state["drift_vector"] = (drift_east, drift_north)
+        break
 
 
 # Initialize once
@@ -503,6 +522,46 @@ with control_col2:
             control_col2.success("✅ Score saved")
         except Exception as e:
             control_col2.error(f"Error saving score: {e}")
+
+drop_city = st.session_state.get("start_location_label", "—")
+drop_country = st.session_state.get("start_location_country", "")
+safe_radius = st.session_state.get("safe_radius_km")
+start_lat = st.session_state.get("start_lat")
+start_lon = st.session_state.get("start_lon")
+
+st.sidebar.markdown("### 📍 Drop Zone")
+st.sidebar.markdown(
+    metric_card(
+        "Built-Up Area",
+        drop_city,
+        accent="#1d4ed8",
+        subtext=drop_country or "Curated urban location",
+    ),
+    unsafe_allow_html=True,
+)
+coord_col1, coord_col2 = st.sidebar.columns(2)
+with coord_col1:
+    lat_text = f"{start_lat:.4f}°" if start_lat is not None else "—"
+    st.markdown(
+        metric_card("Latitude", lat_text, accent="#2563eb", subtext="Launch point"),
+        unsafe_allow_html=True,
+    )
+with coord_col2:
+    lon_text = f"{start_lon:.4f}°" if start_lon is not None else "—"
+    st.markdown(
+        metric_card("Longitude", lon_text, accent="#2563eb", subtext="Launch point"),
+        unsafe_allow_html=True,
+    )
+radius_text = f"{safe_radius:.0f} km" if safe_radius else "—"
+st.sidebar.markdown(
+    metric_card(
+        "Urban Radius",
+        radius_text,
+        accent="#059669",
+        subtext="Trajectory kept off water",
+    ),
+    unsafe_allow_html=True,
+)
 
 st.sidebar.markdown("---")
 
@@ -684,6 +743,18 @@ with col_map:
             icon=folium.Icon(icon="plane", prefix="fa", color="blue"),
         ).add_to(base_map)
 
+        safe_radius_m = st.session_state.get("safe_radius_m")
+        if safe_radius_m:
+            folium.Circle(
+                location=[start_lat, start_lon],
+                radius=safe_radius_m,
+                color="#0ea5e9",
+                weight=1,
+                fill=True,
+                fill_opacity=0.08,
+                tooltip="Urban coverage boundary",
+            ).add_to(base_map)
+
         wind_dir_from = st.session_state["wind_dir"]
         wind_speed = st.session_state["wind_speed"]
         wind_to = (wind_dir_from + 180.0) % 360.0
@@ -823,6 +894,18 @@ with col_map:
             tooltip="Drone Start",
             icon=folium.Icon(icon="plane", prefix="fa", color="blue"),
         ).add_to(overlay_map)
+
+        safe_radius_m = st.session_state.get("safe_radius_m")
+        if safe_radius_m:
+            folium.Circle(
+                location=[start_lat, start_lon],
+                radius=safe_radius_m,
+                color="#0ea5e9",
+                weight=1,
+                fill=True,
+                fill_opacity=0.06,
+                tooltip="Urban coverage boundary",
+            ).add_to(overlay_map)
 
         if st.session_state["rounds_played"] > 1 and st.session_state["total_error"] > 0:
             avg_error_radius = st.session_state["total_error"] / st.session_state["rounds_played"]
