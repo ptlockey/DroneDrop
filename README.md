@@ -20,9 +20,9 @@ DroneDrop is a Streamlit-based game that simulates drone package drops with real
    pip install -r requirements.txt
    ```
 
-### Optional datasets
+### Built-up drop zones
 
-The app uses the Natural Earth datasets bundled with GeoPandas (`naturalearth_cities` and `naturalearth_lowres`) to sample land locations. These files are downloaded automatically the first time GeoPandas accesses them; no manual action is required.
+The game now uses a curated catalogue of inland cities and towns to guarantee that every mission takes place over a built-up area. No external datasets need to be downloaded—locations are bundled directly with the app, and each one carries a safety radius that keeps the full flight path away from oceans and large lakes.
 
 ## How to run
 
