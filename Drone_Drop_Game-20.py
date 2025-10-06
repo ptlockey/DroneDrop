@@ -2,6 +2,7 @@
 
 import streamlit as st
 import folium
+from folium.plugins import PolyLineTextPath
 from streamlit_folium import st_folium
 import random
 import math
@@ -13,8 +14,10 @@ from branca.element import MacroElement, Template
 # ──────────────────────────────────────────────────────────────────────────────
 # SETTINGS
 # ──────────────────────────────────────────────────────────────────────────────
-VECTOR_SCALE = 4    # pixels per m/s for arrow length
-MAP_SIZE     = 700  # map will be 700×700 px square (fits a 1080px screen)
+MAP_SIZE            = 700  # map will be 700×700 px square (fits a 1080px screen)
+MAP_VECTOR_SCALE_M  = 4.0  # metres of arrow length per m/s on the map
+MIN_ARROW_LENGTH_M  = 6.0  # ensure very slow speeds remain visible
+RANGE_RING_RADII_M  = [r for r in range(10, 101, 10)]
 
 # Base (Hard) bullseye radii (in meters) and base point awards:
 BASE_RADII  = [3, 10, 30]
@@ -150,6 +153,95 @@ class SimpleScaleControl(MacroElement):
 def add_simple_scale(map_obj, *, position="bottomleft", max_width=120):
     """Attach the custom metric scale bar to the supplied map."""
     SimpleScaleControl(position=position, max_width=max_width).add_to(map_obj)
+
+
+def add_range_rings(map_obj, *, origin_lat, origin_lon, radii_m=RANGE_RING_RADII_M):
+    """Draw concentric range rings around the launch position."""
+
+    for radius in radii_m:
+        weight = 2 if radius % 50 == 0 else 1
+        folium.Circle(
+            location=[origin_lat, origin_lon],
+            radius=radius,
+            color="#1f2937",
+            weight=weight,
+            opacity=0.55,
+            fill=False,
+            dash_array="6,6" if radius % 50 else None,
+            tooltip=f"{radius} m range",
+        ).add_to(map_obj)
+
+
+def add_vector_arrow(
+    map_obj,
+    *,
+    origin_lat,
+    origin_lon,
+    heading_deg,
+    speed_mps,
+    color,
+    label,
+    offset_east_m=0.0,
+    offset_north_m=0.0,
+):
+    """Draw a scaled velocity arrow anchored near the launch point."""
+
+    if speed_mps <= 0:
+        return
+
+    origin_lat, origin_lon = displacement_to_latlon(
+        origin_lat,
+        origin_lon,
+        offset_east_m,
+        offset_north_m,
+    )
+
+    length_m = max(speed_mps * MAP_VECTOR_SCALE_M, MIN_ARROW_LENGTH_M)
+    heading_rad = math.radians(heading_deg)
+    dx = length_m * math.sin(heading_rad)
+    dy = length_m * math.cos(heading_rad)
+
+    end_lat, end_lon = displacement_to_latlon(
+        origin_lat,
+        origin_lon,
+        dx,
+        dy,
+        dist=length_m,
+        bearing=heading_rad,
+    )
+
+    line = folium.PolyLine(
+        [[origin_lat, origin_lon], [end_lat, end_lon]],
+        color=color,
+        weight=4,
+        opacity=0.85,
+        tooltip=f"{label}: {speed_mps:.1f} m/s",
+    ).add_to(map_obj)
+
+    PolyLineTextPath(
+        line,
+        "➤",
+        repeat=False,
+        offset=12,
+        attributes={
+            "fill": color,
+            "font-weight": "bold",
+            "font-size": "16px",
+        },
+    ).add_to(map_obj)
+
+    folium.Marker(
+        [end_lat, end_lon],
+        icon=folium.DivIcon(
+            html=(
+                f"<div style=\"background:rgba(255,255,255,0.85); padding:2px 6px; border-radius:4px; "
+                f"border:1px solid rgba(15,23,42,0.2); color:{color}; font-size:12px; font-weight:600;\">"
+                f"{label}</div>"
+            ),
+            icon_size=(0, 0),
+            icon_anchor=(0, -8),
+        ),
+    ).add_to(map_obj)
 
 def wedge_coordinates(lat, lon, bearing_deg, spread_deg, distance_m):
     """Return lat/lon coordinates describing a wedge originating at (lat, lon)."""
@@ -743,6 +835,39 @@ with col_map:
             icon=folium.Icon(icon="plane", prefix="fa", color="blue"),
         ).add_to(base_map)
 
+        add_range_rings(base_map, origin_lat=start_lat, origin_lon=start_lon)
+
+        wind_dir_from = st.session_state["wind_dir"]
+        wind_speed = st.session_state["wind_speed"]
+        wind_to = (wind_dir_from + 180.0) % 360.0
+
+        drone_heading = st.session_state["drone_heading"]
+        drone_speed = st.session_state["drone_speed"]
+
+        add_vector_arrow(
+            base_map,
+            origin_lat=start_lat,
+            origin_lon=start_lon,
+            heading_deg=drone_heading,
+            speed_mps=drone_speed,
+            color="#22c55e",
+            label="Drone",
+            offset_east_m=5.0,
+            offset_north_m=5.0,
+        )
+
+        add_vector_arrow(
+            base_map,
+            origin_lat=start_lat,
+            origin_lon=start_lon,
+            heading_deg=wind_to,
+            speed_mps=wind_speed,
+            color="#2563eb",
+            label="Wind",
+            offset_east_m=-5.0,
+            offset_north_m=-5.0,
+        )
+
         safe_radius_m = st.session_state.get("safe_radius_m")
         if safe_radius_m:
             folium.Circle(
@@ -755,9 +880,6 @@ with col_map:
                 tooltip="Urban coverage boundary",
             ).add_to(base_map)
 
-        wind_dir_from = st.session_state["wind_dir"]
-        wind_speed = st.session_state["wind_speed"]
-        wind_to = (wind_dir_from + 180.0) % 360.0
         cone_distance = max(150.0, wind_speed * 80.0)
         cone_points = wedge_coordinates(start_lat, start_lon, wind_to, 35.0, cone_distance)
         if cone_points:
@@ -894,6 +1016,39 @@ with col_map:
             tooltip="Drone Start",
             icon=folium.Icon(icon="plane", prefix="fa", color="blue"),
         ).add_to(overlay_map)
+
+        add_range_rings(overlay_map, origin_lat=start_lat, origin_lon=start_lon)
+
+        wind_dir_from = st.session_state["wind_dir"]
+        wind_speed = st.session_state["wind_speed"]
+        wind_to = (wind_dir_from + 180.0) % 360.0
+
+        drone_heading = st.session_state["drone_heading"]
+        drone_speed = st.session_state["drone_speed"]
+
+        add_vector_arrow(
+            overlay_map,
+            origin_lat=start_lat,
+            origin_lon=start_lon,
+            heading_deg=drone_heading,
+            speed_mps=drone_speed,
+            color="#22c55e",
+            label="Drone",
+            offset_east_m=5.0,
+            offset_north_m=5.0,
+        )
+
+        add_vector_arrow(
+            overlay_map,
+            origin_lat=start_lat,
+            origin_lon=start_lon,
+            heading_deg=wind_to,
+            speed_mps=wind_speed,
+            color="#2563eb",
+            label="Wind",
+            offset_east_m=-5.0,
+            offset_north_m=-5.0,
+        )
 
         safe_radius_m = st.session_state.get("safe_radius_m")
         if safe_radius_m:
